@@ -1,7 +1,6 @@
 package common
 
 import (
-	"context"
 	"sync"
 	"time"
 
@@ -9,6 +8,7 @@ import (
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes"
@@ -16,6 +16,12 @@ import (
 )
 
 var namespaceWatcher NamespaceWatcher
+
+var gvr = schema.GroupVersionResource{
+	Group:    "kubeflow.org",
+	Version:  "v1alpha1",
+	Resource: "poddefaults",
+}
 
 type AddFunc func(obj *v1.Namespace)
 
@@ -32,7 +38,7 @@ type NamespaceWatcher struct {
 }
 
 // create will create a new namespace if one does not already exist. If it does, it will do nothing.
-func (nw *NamespaceWatcher) create(client kubernetes.Interface, resyncPeriod time.Duration) {
+func (nw *NamespaceWatcher) create(client interface{}, resyncPeriod time.Duration) {
 	nw.doOnce.Do(func() {
 		namespaceAdded := func(obj interface{}) {
 			namespace := obj.(*v1.Namespace)
@@ -49,22 +55,42 @@ func (nw *NamespaceWatcher) create(client kubernetes.Interface, resyncPeriod tim
 			}
 		}
 
-		nw.NamespaceStore, nw.NamespaceController = cache.NewInformer(
-			&cache.ListWatch{
-				ListFunc: func(lo metav1.ListOptions) (runtime.Object, error) {
-					return client.CoreV1().Namespaces().List(context.TODO(), lo)
+		switch client.(type) {
+		case kubernetes.Interface:
+			nw.NamespaceStore, nw.NamespaceController = cache.NewInformer(
+				&cache.ListWatch{
+					ListFunc: func(lo metav1.ListOptions) (runtime.Object, error) {
+						return client.(kubernetes.Interface).CoreV1().Namespaces().List(lo)
+					},
+					WatchFunc: func(lo metav1.ListOptions) (watch.Interface, error) {
+						return client.(kubernetes.Interface).CoreV1().Namespaces().Watch(lo)
+					},
 				},
-				WatchFunc: func(lo metav1.ListOptions) (watch.Interface, error) {
-					return client.CoreV1().Namespaces().Watch(context.TODO(), lo)
+				&v1.Namespace{},
+				resyncPeriod,
+				cache.ResourceEventHandlerFuncs{
+					AddFunc:    namespaceAdded,
+					UpdateFunc: namespaceUpdated,
 				},
-			},
-			&v1.Namespace{},
-			resyncPeriod,
-			cache.ResourceEventHandlerFuncs{
-				AddFunc:    namespaceAdded,
-				UpdateFunc: namespaceUpdated,
-			},
-		)
+			)
+			// case dynamic.Interface:
+			// 	nw.NamespaceStore, nw.NamespaceController = cache.NewInformer(
+			// 		&cache.ListWatch{
+			// 			ListFunc: func(lo metav1.ListOptions) (runtime.Object, error) {
+			// 				return client.(dynamic.Interface).Resource(gvr).Namespace("").List(lo)
+			// 			},
+			// 			WatchFunc: func(lo metav1.ListOptions) (watch.Interface, error) {
+			// 				return client.(dynamic.Interface).Resource(gvr).Namespace("").Watch(lo)
+			// 			},
+			// 		},
+			// 		&v1.Namespace{},
+			// 		resyncPeriod,
+			// 		cache.ResourceEventHandlerFuncs{
+			// 			AddFunc:    namespaceAdded,
+			// 			UpdateFunc: namespaceUpdated,
+			// 		},
+			// 	)
+		}
 
 		log.WithField("kind", "Namespace").Infof("running Namespace controller")
 		go nw.NamespaceController.Run(wait.NeverStop)
@@ -73,13 +99,13 @@ func (nw *NamespaceWatcher) create(client kubernetes.Interface, resyncPeriod tim
 }
 
 // OnNamespaceAdded will add another method to a list of functions to be called when a new namespace is created
-func (nw *NamespaceWatcher) OnNamespaceAdded(client kubernetes.Interface, resyncPeriod time.Duration, addFunc AddFunc) {
+func (nw *NamespaceWatcher) OnNamespaceAdded(client interface{}, resyncPeriod time.Duration, addFunc AddFunc) {
 	nw.create(client, resyncPeriod)
 	nw.AddFuncs = append(nw.AddFuncs, addFunc)
 }
 
 // OnNamespaceUpdated will add another method to a list of functions to be called when a namespace is updated
-func (nw *NamespaceWatcher) OnNamespaceUpdated(client kubernetes.Interface, resyncPeriod time.Duration, updateFunc UpdateFunc) {
+func (nw *NamespaceWatcher) OnNamespaceUpdated(client interface{}, resyncPeriod time.Duration, updateFunc UpdateFunc) {
 	nw.create(client, resyncPeriod)
 	nw.UpdateFuncs = append(nw.UpdateFuncs, updateFunc)
 }

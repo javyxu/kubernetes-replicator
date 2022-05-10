@@ -1,4 +1,4 @@
-package rolebinding
+package poddefault
 
 import (
 	"encoding/json"
@@ -8,36 +8,42 @@ import (
 	"github.com/mittwald/kubernetes-replicator/replicate/common"
 	"github.com/pkg/errors"
 	log "github.com/sirupsen/logrus"
-	v1 "k8s.io/api/core/v1"
-
-	rbacv1 "k8s.io/api/rbac/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/watch"
-	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/dynamic"
+
+	poddefaultv1 "github.com/kubeflow/kubeflow/components/admission-webhook/pkg/apis/settings/v1alpha1"
+	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 type Replicator struct {
 	*common.GenericReplicator
 }
 
-const sleepTime = 100 * time.Millisecond
+var gvr = schema.GroupVersionResource{
+	Group:    "kubeflow.org",
+	Version:  "v1alpha1",
+	Resource: "poddefaults",
+}
 
-// NewReplicator creates a new secret replicator
-func NewReplicator(client kubernetes.Interface, resyncPeriod time.Duration, allowAll bool) common.Replicator {
+// NewReplicator creates a new poddefault replicator
+func NewReplicator(client dynamic.Interface, resyncPeriod time.Duration, allowAll bool) common.Replicator {
 	repl := Replicator{
 		GenericReplicator: common.NewGenericReplicator(common.ReplicatorConfig{
-			Kind:         "RoleBinding",
-			ObjType:      &rbacv1.RoleBinding{},
+			Kind:         "PodDefault",
+			ObjType:      &poddefaultv1.PodDefault{},
 			AllowAll:     allowAll,
 			ResyncPeriod: resyncPeriod,
 			Client:       client,
 			ListFunc: func(lo metav1.ListOptions) (runtime.Object, error) {
-				return client.RbacV1().RoleBindings("").List(lo)
+				return client.Resource(gvr).Namespace("").List(metav1.ListOptions{})
 			},
 			WatchFunc: func(lo metav1.ListOptions) (watch.Interface, error) {
-				return client.RbacV1().RoleBindings("").Watch(lo)
+				return client.Resource(gvr).Namespace("").Watch(lo)
 			},
 		}),
 	}
@@ -52,8 +58,8 @@ func NewReplicator(client kubernetes.Interface, resyncPeriod time.Duration, allo
 }
 
 func (r *Replicator) ReplicateDataFrom(sourceObj interface{}, targetObj interface{}) error {
-	source := sourceObj.(*rbacv1.RoleBinding)
-	target := targetObj.(*rbacv1.RoleBinding)
+	source := sourceObj.(*poddefaultv1.PodDefault)
+	target := targetObj.(*poddefaultv1.PodDefault)
 
 	logger := log.
 		WithField("kind", r.Kind).
@@ -69,19 +75,21 @@ func (r *Replicator) ReplicateDataFrom(sourceObj interface{}, targetObj interfac
 	sourceVersion := source.ResourceVersion
 
 	if ok && targetVersion == sourceVersion {
-		logger.Debugf("target %s/%s is already up-to-date", target.Namespace, target.Name)
+		logger.Debugf("target %s is already up-to-date", common.MustGetKey(target))
 		return nil
 	}
 
 	targetCopy := target.DeepCopy()
-	targetCopy.Subjects = source.Subjects
 
-	log.Infof("updating target %s/%s", target.Namespace, target.Name)
+	logger.Infof("updating target %s/%s", target.Namespace, target.Name)
 
 	targetCopy.Annotations[common.ReplicatedAtAnnotation] = time.Now().Format(time.RFC3339)
 	targetCopy.Annotations[common.ReplicatedFromVersionAnnotation] = source.ResourceVersion
 
-	s, err := r.Client.(kubernetes.Interface).RbacV1().RoleBindings(target.Namespace).Update(targetCopy)
+	res, _ := runtime.DefaultUnstructuredConverter.ToUnstructured(targetCopy)
+	mdb := &unstructured.Unstructured{}
+	mdb.SetUnstructuredContent(res)
+	s, err := r.Client.(dynamic.Interface).Resource(gvr).Namespace(target.Namespace).Update(mdb, metav1.UpdateOptions{})
 	if err != nil {
 		err = errors.Wrapf(err, "Failed updating target %s/%s", target.Namespace, targetCopy.Name)
 	} else if err = r.Store.Update(s); err != nil {
@@ -93,7 +101,7 @@ func (r *Replicator) ReplicateDataFrom(sourceObj interface{}, targetObj interfac
 
 // ReplicateObjectTo copies the whole object to target namespace
 func (r *Replicator) ReplicateObjectTo(sourceObj interface{}, target *v1.Namespace) error {
-	source := sourceObj.(*rbacv1.RoleBinding)
+	source := sourceObj.(*poddefaultv1.PodDefault)
 	targetLocation := fmt.Sprintf("%s/%s", target.Name, source.Name)
 
 	logger := log.
@@ -107,20 +115,20 @@ func (r *Replicator) ReplicateObjectTo(sourceObj interface{}, target *v1.Namespa
 	}
 	logger.Infof("Checking if %s exists? %v", targetLocation, exists)
 
-	var targetCopy *rbacv1.RoleBinding
+	var targetCopy *poddefaultv1.PodDefault
 	if exists {
-		targetObject := targetResource.(*rbacv1.RoleBinding)
+		targetObject := targetResource.(*poddefaultv1.PodDefault)
 		targetVersion, ok := targetObject.Annotations[common.ReplicatedFromVersionAnnotation]
 		sourceVersion := source.ResourceVersion
 
 		if ok && targetVersion == sourceVersion {
-			logger.Debugf("RoleBinding %s is already up-to-date", common.MustGetKey(targetObject))
+			logger.Debugf("PodDefault %s is already up-to-date", common.MustGetKey(targetObject))
 			return nil
 		}
 
 		targetCopy = targetObject.DeepCopy()
 	} else {
-		targetCopy = new(rbacv1.RoleBinding)
+		targetCopy = new(poddefaultv1.PodDefault)
 	}
 
 	keepOwnerReferences, ok := source.Annotations[common.KeepOwnerReferences]
@@ -128,6 +136,9 @@ func (r *Replicator) ReplicateObjectTo(sourceObj interface{}, target *v1.Namespa
 		targetCopy.OwnerReferences = source.OwnerReferences
 	}
 
+	// if targetCopy.Rules == nil {
+	// 	targetCopy.Rules = make([]rbacv1.PolicyRule, 0)
+	// }
 	if targetCopy.Annotations == nil {
 		targetCopy.Annotations = make(map[string]string)
 	}
@@ -141,33 +152,26 @@ func (r *Replicator) ReplicateObjectTo(sourceObj interface{}, target *v1.Namespa
 				labelsCopy[key] = value
 			}
 		}
-
 	}
 
 	targetCopy.Name = source.Name
 	targetCopy.Labels = labelsCopy
-	targetCopy.Subjects = source.Subjects
-	targetCopy.RoleRef = source.RoleRef
 	targetCopy.Annotations[common.ReplicatedAtAnnotation] = time.Now().Format(time.RFC3339)
 	targetCopy.Annotations[common.ReplicatedFromVersionAnnotation] = source.ResourceVersion
 
+	res, _ := runtime.DefaultUnstructuredConverter.ToUnstructured(targetCopy)
+	mdb := &unstructured.Unstructured{}
+	mdb.SetUnstructuredContent(res)
 	var obj interface{}
-	if targetCopy.RoleRef.Kind == "Role" {
-		err = r.canReplicate(target.Name, targetCopy.RoleRef.Name)
-	}
 	if exists {
-		if err == nil {
-			logger.Debugf("Updating existing roleBinding %s/%s", target.Name, targetCopy.Name)
-			obj, err = r.Client.(kubernetes.Interface).RbacV1().RoleBindings(target.Name).Update(targetCopy)
-		}
+		logger.Debugf("Updating existing role %s/%s", target.Name, targetCopy.Name)
+		obj, err = r.Client.(dynamic.Interface).Resource(gvr).Namespace(target.Name).Update(mdb, metav1.UpdateOptions{})
 	} else {
-		if err == nil {
-			logger.Debugf("Creating a new roleBinding %s/%s", target.Name, targetCopy.Name)
-			obj, err = r.Client.(kubernetes.Interface).RbacV1().RoleBindings(target.Name).Create(targetCopy)
-		}
+		logger.Debugf("Creating a new role %s/%s", target.Name, targetCopy.Name)
+		obj, err = r.Client.(dynamic.Interface).Resource(gvr).Namespace(target.Name).Create(mdb, metav1.CreateOptions{})
 	}
 	if err != nil {
-		return errors.Wrapf(err, "Failed to update roleBinding %s/%s", target.Name, targetCopy.Name)
+		return errors.Wrapf(err, "Failed to update role %s/%s", target.Name, targetCopy.Name)
 	}
 
 	if err := r.Store.Update(obj); err != nil {
@@ -177,20 +181,8 @@ func (r *Replicator) ReplicateObjectTo(sourceObj interface{}, target *v1.Namespa
 	return nil
 }
 
-//Checks if Role required for RoleBinding exists. Retries a few times before returning error to allow replication to catch up
-func (r *Replicator) canReplicate(targetNameSpace string, roleRef string) (err error) {
-	for i := 0; i < 5; i++ {
-		_, err = r.Client.(kubernetes.Interface).RbacV1().Roles(targetNameSpace).Get(roleRef, metav1.GetOptions{})
-		if err == nil {
-			break
-		} else {
-			time.Sleep(sleepTime)
-		}
-	}
-	return
-}
-
 func (r *Replicator) PatchDeleteDependent(sourceKey string, target interface{}) (interface{}, error) {
+
 	dependentKey := common.MustGetKey(target)
 	logger := log.WithFields(log.Fields{
 		"kind":   r.Kind,
@@ -198,24 +190,23 @@ func (r *Replicator) PatchDeleteDependent(sourceKey string, target interface{}) 
 		"target": dependentKey,
 	})
 
-	targetObject, ok := target.(*rbacv1.RoleBinding)
+	targetObject, ok := target.(*poddefaultv1.PodDefault)
 	if !ok {
 		err := errors.Errorf("bad type returned from Store: %T", target)
 		return nil, err
 	}
 
-	patch := []common.JSONPatchOperation{{Operation: "remove", Path: "/subjects"}}
+	patch := []common.JSONPatchOperation{{Operation: "remove", Path: "/rules"}}
 	patchBody, err := json.Marshal(&patch)
 
 	if err != nil {
-		return nil, errors.Wrapf(err, "error while building patch body for roleBinding %s: %v", dependentKey, err)
-
+		return nil, errors.Wrapf(err, "error while building patch body for role %s: %v", dependentKey, err)
 	}
 
-	logger.Debugf("clearing dependent roleBinding %s", dependentKey)
+	logger.Debugf("clearing dependent role %s", dependentKey)
 	logger.Tracef("patch body: %s", string(patchBody))
 
-	s, err := r.Client.(kubernetes.Interface).RbacV1().RoleBindings(targetObject.Namespace).Patch(targetObject.Name, types.JSONPatchType, patchBody)
+	s, err := r.Client.(dynamic.Interface).Resource(gvr).Namespace(targetObject.Namespace).Patch(targetObject.Name, types.JSONPatchType, patchBody, metav1.UpdateOptions{})
 	if err != nil {
 		return nil, errors.Wrapf(err, "error while patching role %s: %v", dependentKey, err)
 	}
@@ -230,9 +221,9 @@ func (r *Replicator) DeleteReplicatedResource(targetResource interface{}) error 
 		"target": targetLocation,
 	})
 
-	object := targetResource.(*rbacv1.RoleBinding)
+	object := targetResource.(*poddefaultv1.PodDefault)
 	logger.Debugf("Deleting %s", targetLocation)
-	if err := r.Client.(kubernetes.Interface).RbacV1().RoleBindings(object.Namespace).Delete(object.Name, &metav1.DeleteOptions{}); err != nil {
+	if err := r.Client.(dynamic.Interface).Resource(gvr).Namespace(object.Namespace).Delete(object.Name, &metav1.DeleteOptions{}); err != nil {
 		return errors.Wrapf(err, "Failed deleting %s: %v", targetLocation, err)
 	}
 	return nil

@@ -8,6 +8,7 @@ import (
 
 	"github.com/mittwald/kubernetes-replicator/replicate/common"
 	"github.com/mittwald/kubernetes-replicator/replicate/configmap"
+	"github.com/mittwald/kubernetes-replicator/replicate/poddefault"
 	"github.com/mittwald/kubernetes-replicator/replicate/role"
 	"github.com/mittwald/kubernetes-replicator/replicate/rolebinding"
 	"github.com/mittwald/kubernetes-replicator/replicate/secret"
@@ -15,6 +16,7 @@ import (
 	log "github.com/sirupsen/logrus"
 
 	"github.com/mittwald/kubernetes-replicator/liveness"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -65,6 +67,7 @@ func main() {
 	var config *rest.Config
 	var err error
 	var client kubernetes.Interface
+	var dynamicclient dynamic.Interface
 
 	if f.Kubeconfig == "" {
 		log.Info("using in-cluster configuration")
@@ -79,11 +82,13 @@ func main() {
 	}
 
 	client = kubernetes.NewForConfigOrDie(config)
+	dynamicclient = dynamic.NewForConfigOrDie(config)
 
 	secretRepl := secret.NewReplicator(client, f.ResyncPeriod, f.AllowAll)
 	configMapRepl := configmap.NewReplicator(client, f.ResyncPeriod, f.AllowAll)
 	roleRepl := role.NewReplicator(client, f.ResyncPeriod, f.AllowAll)
 	roleBindingRepl := rolebinding.NewReplicator(client, f.ResyncPeriod, f.AllowAll)
+	poddefaultRepl := poddefault.NewReplicator(dynamicclient, f.ResyncPeriod, f.AllowAll)
 
 	go secretRepl.Run()
 
@@ -92,6 +97,8 @@ func main() {
 	go roleRepl.Run()
 
 	go roleBindingRepl.Run()
+
+	go poddefaultRepl.Run()
 
 	h := liveness.Handler{
 		Replicators: []common.Replicator{secretRepl, configMapRepl, roleRepl, roleBindingRepl},

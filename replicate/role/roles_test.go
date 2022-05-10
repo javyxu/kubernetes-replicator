@@ -2,16 +2,16 @@ package role
 
 import (
 	"bytes"
-	"context"
 	"fmt"
-	rbacv1 "k8s.io/api/rbac/v1"
-	"k8s.io/apimachinery/pkg/types"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	rbacv1 "k8s.io/api/rbac/v1"
+	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/mittwald/kubernetes-replicator/replicate/common"
 	pkgerrors "github.com/pkg/errors"
@@ -89,7 +89,7 @@ func TestRoleReplicator(t *testing.T) {
 			Name: prefix + "test",
 		},
 	}
-	_, err = client.CoreV1().Namespaces().Create(context.TODO(), &ns, metav1.CreateOptions{})
+	_, err = client.CoreV1().Namespaces().Create(&ns)
 	require.NoError(t, err)
 
 	ns2 := corev1.Namespace{
@@ -99,12 +99,12 @@ func TestRoleReplicator(t *testing.T) {
 				"foo": "bar",
 			}},
 	}
-	_, err = client.CoreV1().Namespaces().Create(context.TODO(), &ns2, metav1.CreateOptions{})
+	_, err = client.CoreV1().Namespaces().Create(&ns2)
 	require.NoError(t, err)
 
 	defer func() {
-		_ = client.CoreV1().Namespaces().Delete(context.TODO(), ns.Name, metav1.DeleteOptions{})
-		_ = client.CoreV1().Namespaces().Delete(context.TODO(), ns2.Name, metav1.DeleteOptions{})
+		_ = client.CoreV1().Namespaces().Delete(ns.Name, &metav1.DeleteOptions{})
+		_ = client.CoreV1().Namespaces().Delete(ns2.Name, &metav1.DeleteOptions{})
 	}()
 
 	roles := client.RbacV1().Roles(prefix + "test")
@@ -157,16 +157,16 @@ func TestRoleReplicator(t *testing.T) {
 			},
 		})
 
-		_, err := roles.Create(context.TODO(), &source, metav1.CreateOptions{})
+		_, err := roles.Create(&source)
 		require.NoError(t, err)
 
-		_, err = roles.Create(context.TODO(), &target, metav1.CreateOptions{})
+		_, err = roles.Create(&target)
 		require.NoError(t, err)
 
 		waitWithTimeout(wg, MaxWaitTime)
 		close(stop)
 
-		updTarget, err := roles.Get(context.TODO(), target.Name, metav1.GetOptions{})
+		updTarget, err := roles.Get(target.Name, metav1.GetOptions{})
 		require.NoError(t, err)
 		require.EqualValues(t, source.Rules, updTarget.Rules)
 	})
@@ -199,14 +199,14 @@ func TestRoleReplicator(t *testing.T) {
 				}
 			},
 		})
-		_, err := roles.Create(context.TODO(), &source, metav1.CreateOptions{})
+		_, err := roles.Create(&source)
 		require.NoError(t, err)
 
 		waitWithTimeout(wg, MaxWaitTime)
 		close(stop)
 
 		roles2 := client.RbacV1().Roles(prefix + "test2")
-		updTarget, err := roles2.Get(context.TODO(), source.Name, metav1.GetOptions{})
+		updTarget, err := roles2.Get(source.Name, metav1.GetOptions{})
 
 		require.NoError(t, err)
 		require.EqualValues(t, source.Rules, updTarget.Rules)
@@ -221,13 +221,13 @@ func TestRoleReplicator(t *testing.T) {
 			},
 		})
 
-		_, err = roles.Patch(context.TODO(), source.Name, types.JSONPatchType, []byte(`[{"op": "remove", "path": "/rules/0"}]`), metav1.PatchOptions{})
+		_, err = roles.Patch(source.Name, types.JSONPatchType, []byte(`[{"op": "remove", "path": "/rules/0"}]`))
 		require.NoError(t, err)
 
 		waitWithTimeout(wg, MaxWaitTime)
 		close(stop)
 
-		updTarget, err = roles2.Get(context.TODO(), source.Name, metav1.GetOptions{})
+		updTarget, err = roles2.Get(source.Name, metav1.GetOptions{})
 		require.NoError(t, err)
 
 		require.Len(t, updTarget.Rules, 0)
@@ -260,7 +260,7 @@ func TestRoleReplicator(t *testing.T) {
 			},
 		})
 
-		_, err := roles.Create(context.TODO(), &source, metav1.CreateOptions{})
+		_, err := roles.Create(&source)
 		require.NoError(t, err)
 
 		waitWithTimeout(wg, MaxWaitTime)
@@ -288,11 +288,11 @@ func TestRoleReplicator(t *testing.T) {
 			},
 		})
 
-		_, err = client.CoreV1().Namespaces().Create(context.TODO(), &ns3, metav1.CreateOptions{})
+		_, err = client.CoreV1().Namespaces().Create(&ns3)
 		require.NoError(t, err)
 
 		defer func() {
-			_ = client.CoreV1().Namespaces().Delete(context.TODO(), ns3.Name, metav1.DeleteOptions{})
+			_ = client.CoreV1().Namespaces().Delete(ns3.Name, &metav1.DeleteOptions{})
 		}()
 
 		waitWithTimeout(wg, MaxWaitTime)
@@ -302,7 +302,7 @@ func TestRoleReplicator(t *testing.T) {
 		close(stop2)
 
 		roles3 := client.RbacV1().Roles(namespaceName)
-		updTarget, err := roles3.Get(context.TODO(), source.Name, metav1.GetOptions{})
+		updTarget, err := roles3.Get(source.Name, metav1.GetOptions{})
 		require.NoError(t, err)
 		require.EqualValues(t, source.Rules, updTarget.Rules)
 
@@ -315,13 +315,13 @@ func TestRoleReplicator(t *testing.T) {
 				}
 			},
 		})
-		_, err = roles.Patch(context.TODO(), source.Name, types.JSONPatchType, []byte(`[{"op": "remove", "path": "/rules/0"}]`), metav1.PatchOptions{})
+		_, err = roles.Patch(source.Name, types.JSONPatchType, []byte(`[{"op": "remove", "path": "/rules/0"}]`))
 		require.NoError(t, err)
 
 		waitWithTimeout(wg, MaxWaitTime)
 		close(stop)
 
-		updTarget, err = roles3.Get(context.TODO(), source.Name, metav1.GetOptions{})
+		updTarget, err = roles3.Get(source.Name, metav1.GetOptions{})
 		require.NoError(t, err)
 
 		require.Len(t, updTarget.Rules, 0)
