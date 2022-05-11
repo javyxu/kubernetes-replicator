@@ -16,12 +16,6 @@ import (
 
 var namespaceWatcher NamespaceWatcher
 
-// var gvr = schema.GroupVersionResource{
-// 	Group:    "kubeflow.org",
-// 	Version:  "v1alpha1",
-// 	Resource: "poddefaults",
-// }
-
 type AddFunc func(obj *v1.Namespace)
 
 type UpdateFunc func(old *v1.Namespace, new *v1.Namespace)
@@ -54,8 +48,6 @@ func (nw *NamespaceWatcher) create(client kubernetes.Interface, resyncPeriod tim
 			}
 		}
 
-		// switch client.(type) {
-		// case kubernetes.Interface:
 		nw.NamespaceStore, nw.NamespaceController = cache.NewInformer(
 			&cache.ListWatch{
 				ListFunc: func(lo metav1.ListOptions) (runtime.Object, error) {
@@ -72,24 +64,6 @@ func (nw *NamespaceWatcher) create(client kubernetes.Interface, resyncPeriod tim
 				UpdateFunc: namespaceUpdated,
 			},
 		)
-		// case dynamic.Interface:
-		// 	nw.NamespaceStore, nw.NamespaceController = cache.NewInformer(
-		// 		&cache.ListWatch{
-		// 			ListFunc: func(lo metav1.ListOptions) (runtime.Object, error) {
-		// 				return client.(dynamic.Interface).Resource(gvr).Namespace("").List(lo)
-		// 			},
-		// 			WatchFunc: func(lo metav1.ListOptions) (watch.Interface, error) {
-		// 				return client.(dynamic.Interface).Resource(gvr).Namespace("").Watch(lo)
-		// 			},
-		// 		},
-		// 		&v1.Namespace{},
-		// 		resyncPeriod,
-		// 		cache.ResourceEventHandlerFuncs{
-		// 			AddFunc:    namespaceAdded,
-		// 			UpdateFunc: namespaceUpdated,
-		// 		},
-		// 	)
-		// }
 
 		log.WithField("kind", "Namespace").Infof("running Namespace controller")
 		go nw.NamespaceController.Run(wait.NeverStop)
