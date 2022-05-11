@@ -17,18 +17,20 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 )
 
 type ReplicatorConfig struct {
-	Kind         string
-	Client       interface{}
-	ResyncPeriod time.Duration
-	AllowAll     bool
-	ListFunc     cache.ListFunc
-	WatchFunc    cache.WatchFunc
-	ObjType      runtime.Object
+	Kind          string
+	Client        kubernetes.Interface
+	DynamicClient dynamic.Interface
+	ResyncPeriod  time.Duration
+	AllowAll      bool
+	ListFunc      cache.ListFunc
+	WatchFunc     cache.WatchFunc
+	ObjType       runtime.Object
 }
 
 type UpdateFuncs struct {
@@ -78,15 +80,8 @@ func NewGenericReplicator(config ReplicatorConfig) *GenericReplicator {
 		},
 	)
 
-	if config.Client != nil {
-		namespaceWatcher.OnNamespaceAdded(config.Client, config.ResyncPeriod, repl.NamespaceAdded)
-		namespaceWatcher.OnNamespaceUpdated(config.Client, config.ResyncPeriod, repl.NamespaceUpdated)
-	}
-
-	// if config.DynamicClient != nil {
-	// 	namespaceWatcher.OnNamespaceAdded(config.DynamicClient, config.ResyncPeriod, repl.NamespaceAdded)
-	// 	namespaceWatcher.OnNamespaceUpdated(config.DynamicClient, config.ResyncPeriod, repl.NamespaceUpdated)
-	// }
+	namespaceWatcher.OnNamespaceAdded(config.Client, config.ResyncPeriod, repl.NamespaceAdded)
+	namespaceWatcher.OnNamespaceUpdated(config.Client, config.ResyncPeriod, repl.NamespaceUpdated)
 
 	repl.Store = store
 	repl.Controller = controller
@@ -363,7 +358,7 @@ func (r *GenericReplicator) replicateResourceToMatchingNamespaces(obj interface{
 func (r *GenericReplicator) replicateResourceToMatchingNamespacesByLabel(ctx context.Context, obj interface{}, selector labels.Selector) error {
 	cacheKey := MustGetKey(obj)
 
-	namespaces, err := r.Client.(kubernetes.Interface).CoreV1().Namespaces().List(metav1.ListOptions{LabelSelector: selector.String()})
+	namespaces, err := r.Client.CoreV1().Namespaces().List(metav1.ListOptions{LabelSelector: selector.String()})
 	if err != nil {
 		return errors.Wrap(err, "error while listing namespaces by selector")
 	}
@@ -476,7 +471,7 @@ func (r *GenericReplicator) ResourceDeletedReplicateTo(source interface{}) {
 	namespaceList, replicateTo := objMeta.GetAnnotations()[ReplicateTo]
 	if replicateTo {
 		filters := strings.Split(namespaceList, ",")
-		list, err := r.Client.(kubernetes.Interface).CoreV1().Namespaces().List(metav1.ListOptions{})
+		list, err := r.Client.CoreV1().Namespaces().List(metav1.ListOptions{})
 		if err != nil {
 			err = errors.Wrapf(err, "Failed to list namespaces: %v", err)
 			logger.WithError(err).Errorf("Could not get namespaces: %+v", err)
@@ -494,7 +489,7 @@ func (r *GenericReplicator) ResourceDeletedReplicateTo(source interface{}) {
 			logger.WithError(err).Errorf("Could not get namespaces: %+v", err)
 		} else {
 			var namespaces *v1.NamespaceList
-			namespaces, err = r.Client.(kubernetes.Interface).CoreV1().Namespaces().List(metav1.ListOptions{LabelSelector: namespaceSelector.String()})
+			namespaces, err = r.Client.CoreV1().Namespaces().List(metav1.ListOptions{LabelSelector: namespaceSelector.String()})
 			if err != nil {
 				err = errors.Wrapf(err, "Failed to list namespaces: %v", err)
 				logger.WithError(err).Errorf("Could not get namespaces: %+v", err)

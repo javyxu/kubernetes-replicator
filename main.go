@@ -26,11 +26,11 @@ var f flags
 
 func init() {
 	var err error
-	flag.StringVar(&f.Kubeconfig, "kubeconfig", "", "path to Kubernetes config file")
-	flag.StringVar(&f.ResyncPeriodS, "resync-period", "30m", "resynchronization period")
+	flag.StringVar(&f.Kubeconfig, "kubeconfig", "/home/zhiwei/.kube/config", "path to Kubernetes config file")
+	flag.StringVar(&f.ResyncPeriodS, "resync-period", "1m", "resynchronization period")
 	flag.StringVar(&f.StatusAddr, "status-addr", ":9102", "listen address for status and monitoring server")
-	flag.StringVar(&f.LogLevel, "log-level", "info", "Log level (trace, debug, info, warn, error)")
-	flag.StringVar(&f.LogFormat, "log-format", "plain", "Log format (plain, json)")
+	flag.StringVar(&f.LogLevel, "log-level", "debug", "Log level (trace, debug, info, warn, error)")
+	flag.StringVar(&f.LogFormat, "log-format", "trace", "Log format (plain, json)")
 	flag.BoolVar(&f.AllowAll, "allow-all", false, "allow replication of all secrets (CAUTION: only use when you know what you're doing)")
 	flag.Parse()
 
@@ -88,7 +88,7 @@ func main() {
 	configMapRepl := configmap.NewReplicator(client, f.ResyncPeriod, f.AllowAll)
 	roleRepl := role.NewReplicator(client, f.ResyncPeriod, f.AllowAll)
 	roleBindingRepl := rolebinding.NewReplicator(client, f.ResyncPeriod, f.AllowAll)
-	poddefaultRepl := poddefault.NewReplicator(dynamicclient, f.ResyncPeriod, f.AllowAll)
+	poddefaultRepl := poddefault.NewReplicator(client, dynamicclient, f.ResyncPeriod, f.AllowAll)
 
 	go secretRepl.Run()
 

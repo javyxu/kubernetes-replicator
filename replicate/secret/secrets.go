@@ -105,7 +105,7 @@ func (r *Replicator) ReplicateDataFrom(sourceObj interface{}, targetObj interfac
 	targetCopy.Annotations[common.ReplicatedFromVersionAnnotation] = source.ResourceVersion
 	targetCopy.Annotations[common.ReplicatedKeysAnnotation] = strings.Join(replicatedKeys, ",")
 
-	s, err := r.Client.(kubernetes.Interface).CoreV1().Secrets(target.Namespace).Update(targetCopy)
+	s, err := r.Client.CoreV1().Secrets(target.Namespace).Update(targetCopy)
 	if err != nil {
 		err = errors.Wrapf(err, "Failed updating target %s/%s", target.Namespace, targetCopy.Name)
 	} else if err = r.Store.Update(s); err != nil {
@@ -185,10 +185,10 @@ func (r *Replicator) ReplicateObjectTo(sourceObj interface{}, target *v1.Namespa
 	var obj interface{}
 	if exists {
 		logger.Debugf("Updating existing secret %s/%s", target.Name, resourceCopy.Name)
-		obj, err = r.Client.(kubernetes.Interface).CoreV1().Secrets(target.Name).Update(resourceCopy)
+		obj, err = r.Client.CoreV1().Secrets(target.Name).Update(resourceCopy)
 	} else {
 		logger.Debugf("Creating a new secret secret %s/%s", target.Name, resourceCopy.Name)
-		obj, err = r.Client.(kubernetes.Interface).CoreV1().Secrets(target.Name).Create(resourceCopy)
+		obj, err = r.Client.CoreV1().Secrets(target.Name).Create(resourceCopy)
 	}
 	if err != nil {
 		err = errors.Wrapf(err, "Failed to update secret %s/%s", target.Name, resourceCopy.Name)
@@ -250,7 +250,7 @@ func (r *Replicator) PatchDeleteDependent(sourceKey string, target interface{}) 
 	logger.Debugf("clearing dependent %s %s", r.Kind, dependentKey)
 	logger.Tracef("patch body: %s", string(patchBody))
 
-	s, err := r.Client.(kubernetes.Interface).CoreV1().Secrets(targetObject.Namespace).Patch(targetObject.Name, types.JSONPatchType, patchBody)
+	s, err := r.Client.CoreV1().Secrets(targetObject.Namespace).Patch(targetObject.Name, types.JSONPatchType, patchBody)
 	if err != nil {
 		return nil, errors.Wrapf(err, "error while patching secret %s: %v", dependentKey, err)
 	}
@@ -269,7 +269,7 @@ func (r *Replicator) DeleteReplicatedResource(targetResource interface{}) error 
 	resourceKeys := strings.Join(common.GetKeysFromBinaryMap(object.Data), ",")
 	if resourceKeys == object.Annotations[common.ReplicatedKeysAnnotation] {
 		logger.Debugf("Deleting %s", targetLocation)
-		if err := r.Client.(kubernetes.Interface).CoreV1().Secrets(object.Namespace).Delete(object.Name, &metav1.DeleteOptions{}); err != nil {
+		if err := r.Client.CoreV1().Secrets(object.Namespace).Delete(object.Name, &metav1.DeleteOptions{}); err != nil {
 			return errors.Wrapf(err, "Failed deleting %s: %v", targetLocation, err)
 		}
 	} else {
@@ -290,7 +290,7 @@ func (r *Replicator) DeleteReplicatedResource(targetResource interface{}) error 
 			return errors.Wrapf(err, "error while building patch body for confimap %s: %v", object, err)
 		}
 
-		s, err := r.Client.(kubernetes.Interface).CoreV1().Secrets(object.Namespace).Patch(object.Name, types.JSONPatchType, patchBody)
+		s, err := r.Client.CoreV1().Secrets(object.Namespace).Patch(object.Name, types.JSONPatchType, patchBody)
 		if err != nil {
 			return errors.Wrapf(err, "error while patching secret %s: %v", s, err)
 

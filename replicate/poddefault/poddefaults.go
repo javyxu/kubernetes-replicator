@@ -13,6 +13,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/kubernetes"
 
 	poddefaultv1 "github.com/kubeflow/kubeflow/components/admission-webhook/pkg/apis/settings/v1alpha1"
 	v1 "k8s.io/api/core/v1"
@@ -31,19 +32,24 @@ var gvr = schema.GroupVersionResource{
 }
 
 // NewReplicator creates a new poddefault replicator
-func NewReplicator(client dynamic.Interface, resyncPeriod time.Duration, allowAll bool) common.Replicator {
+func NewReplicator(client kubernetes.Interface, dynamicclient dynamic.Interface, resyncPeriod time.Duration, allowAll bool) common.Replicator {
 	repl := Replicator{
 		GenericReplicator: common.NewGenericReplicator(common.ReplicatorConfig{
-			Kind:         "PodDefault",
-			ObjType:      &poddefaultv1.PodDefault{},
-			AllowAll:     allowAll,
-			ResyncPeriod: resyncPeriod,
-			Client:       client,
+			Kind:          "PodDefault",
+			ObjType:       &poddefaultv1.PodDefault{},
+			AllowAll:      allowAll,
+			ResyncPeriod:  resyncPeriod,
+			Client:        client,
+			DynamicClient: dynamicclient,
 			ListFunc: func(lo metav1.ListOptions) (runtime.Object, error) {
-				return client.Resource(gvr).Namespace("").List(metav1.ListOptions{})
+				// return dynamicclient.Resource(gvr).Namespace("").List(lo)
+				res, err := dynamicclient.Resource(gvr).Namespace("").List(lo)
+				var targetObject poddefaultv1.PodDefaultList
+				runtime.DefaultUnstructuredConverter.FromUnstructured(res.UnstructuredContent(), &targetObject)
+				return &targetObject, err
 			},
 			WatchFunc: func(lo metav1.ListOptions) (watch.Interface, error) {
-				return client.Resource(gvr).Namespace("").Watch(lo)
+				return dynamicclient.Resource(gvr).Namespace("").Watch(lo)
 			},
 		}),
 	}
@@ -58,21 +64,26 @@ func NewReplicator(client dynamic.Interface, resyncPeriod time.Duration, allowAl
 }
 
 func (r *Replicator) ReplicateDataFrom(sourceObj interface{}, targetObj interface{}) error {
-	source := sourceObj.(*poddefaultv1.PodDefault)
+	// source := sourceObj.(*unstructured.Unstructured)
+	// var srcpoddefault poddefaultv1.PodDefault
+	// runtime.DefaultUnstructuredConverter.FromUnstructured(source.UnstructuredContent(), &srcpoddefault)
+	srcpoddefault := sourceObj.(*poddefaultv1.PodDefault)
 	target := targetObj.(*poddefaultv1.PodDefault)
 
 	logger := log.
 		WithField("kind", r.Kind).
-		WithField("source", common.MustGetKey(source)).
+		// WithField("source", common.MustGetKey(source)).
+		WithField("source", common.MustGetKey(srcpoddefault)).
 		WithField("target", common.MustGetKey(target))
 
 	// make sure replication is allowed
-	if ok, err := r.IsReplicationPermitted(&target.ObjectMeta, &source.ObjectMeta); !ok {
-		return errors.Wrapf(err, "replication of target %s is not permitted", common.MustGetKey(source))
+	if ok, err := r.IsReplicationPermitted(&target.ObjectMeta, &srcpoddefault.ObjectMeta); !ok {
+		// return errors.Wrapf(err, "replication of target %s is not permitted", common.MustGetKey(source))
+		return errors.Wrapf(err, "replication of target %s is not permitted", common.MustGetKey(srcpoddefault))
 	}
 
 	targetVersion, ok := target.Annotations[common.ReplicatedFromVersionAnnotation]
-	sourceVersion := source.ResourceVersion
+	sourceVersion := srcpoddefault.ResourceVersion
 
 	if ok && targetVersion == sourceVersion {
 		logger.Debugf("target %s is already up-to-date", common.MustGetKey(target))
@@ -84,12 +95,12 @@ func (r *Replicator) ReplicateDataFrom(sourceObj interface{}, targetObj interfac
 	logger.Infof("updating target %s/%s", target.Namespace, target.Name)
 
 	targetCopy.Annotations[common.ReplicatedAtAnnotation] = time.Now().Format(time.RFC3339)
-	targetCopy.Annotations[common.ReplicatedFromVersionAnnotation] = source.ResourceVersion
+	targetCopy.Annotations[common.ReplicatedFromVersionAnnotation] = srcpoddefault.ResourceVersion
 
 	res, _ := runtime.DefaultUnstructuredConverter.ToUnstructured(targetCopy)
 	mdb := &unstructured.Unstructured{}
 	mdb.SetUnstructuredContent(res)
-	s, err := r.Client.(dynamic.Interface).Resource(gvr).Namespace(target.Namespace).Update(mdb, metav1.UpdateOptions{})
+	s, err := r.DynamicClient.Resource(gvr).Namespace(target.Namespace).Update(mdb, metav1.UpdateOptions{})
 	if err != nil {
 		err = errors.Wrapf(err, "Failed updating target %s/%s", target.Namespace, targetCopy.Name)
 	} else if err = r.Store.Update(s); err != nil {
@@ -101,12 +112,16 @@ func (r *Replicator) ReplicateDataFrom(sourceObj interface{}, targetObj interfac
 
 // ReplicateObjectTo copies the whole object to target namespace
 func (r *Replicator) ReplicateObjectTo(sourceObj interface{}, target *v1.Namespace) error {
-	source := sourceObj.(*poddefaultv1.PodDefault)
-	targetLocation := fmt.Sprintf("%s/%s", target.Name, source.Name)
+	// source := sourceObj.(*unstructured.Unstructured)
+	// var srcpoddefault poddefaultv1.PodDefault
+	// runtime.DefaultUnstructuredConverter.FromUnstructured(source.UnstructuredContent(), &srcpoddefault)
+	srcpoddefault := sourceObj.(*poddefaultv1.PodDefault)
+	targetLocation := fmt.Sprintf("%s/%s", target.Name, srcpoddefault.Name)
 
 	logger := log.
 		WithField("kind", r.Kind).
-		WithField("source", common.MustGetKey(source)).
+		// WithField("source", common.MustGetKey(source)).
+		WithField("source", common.MustGetKey(srcpoddefault)).
 		WithField("target", targetLocation)
 
 	targetResource, exists, err := r.Store.GetByKey(targetLocation)
@@ -117,11 +132,15 @@ func (r *Replicator) ReplicateObjectTo(sourceObj interface{}, target *v1.Namespa
 
 	var targetCopy *poddefaultv1.PodDefault
 	if exists {
+		// targetsource := targetResource.(*unstructured.Unstructured)
+		// var targetObject poddefaultv1.PodDefault
+		// runtime.DefaultUnstructuredConverter.FromUnstructured(targetsource.UnstructuredContent(), &targetObject)
 		targetObject := targetResource.(*poddefaultv1.PodDefault)
 		targetVersion, ok := targetObject.Annotations[common.ReplicatedFromVersionAnnotation]
-		sourceVersion := source.ResourceVersion
+		sourceVersion := srcpoddefault.ResourceVersion
 
 		if ok && targetVersion == sourceVersion {
+			// logger.Debugf("PodDefault %s is already up-to-date", common.MustGetKey(targetsource))
 			logger.Debugf("PodDefault %s is already up-to-date", common.MustGetKey(targetObject))
 			return nil
 		}
@@ -131,47 +150,47 @@ func (r *Replicator) ReplicateObjectTo(sourceObj interface{}, target *v1.Namespa
 		targetCopy = new(poddefaultv1.PodDefault)
 	}
 
-	keepOwnerReferences, ok := source.Annotations[common.KeepOwnerReferences]
+	keepOwnerReferences, ok := srcpoddefault.Annotations[common.KeepOwnerReferences]
 	if ok && keepOwnerReferences == "true" {
-		targetCopy.OwnerReferences = source.OwnerReferences
+		targetCopy.OwnerReferences = srcpoddefault.OwnerReferences
 	}
 
-	// if targetCopy.Rules == nil {
-	// 	targetCopy.Rules = make([]rbacv1.PolicyRule, 0)
-	// }
 	if targetCopy.Annotations == nil {
 		targetCopy.Annotations = make(map[string]string)
 	}
 
 	labelsCopy := make(map[string]string)
 
-	stripLabels, ok := source.Annotations[common.StripLabels]
+	stripLabels, ok := srcpoddefault.Annotations[common.StripLabels]
 	if !ok && stripLabels != "true" {
-		if source.Labels != nil {
-			for key, value := range source.Labels {
+		if srcpoddefault.Labels != nil {
+			for key, value := range srcpoddefault.Labels {
 				labelsCopy[key] = value
 			}
 		}
 	}
 
-	targetCopy.Name = source.Name
+	targetCopy.Kind = srcpoddefault.Kind
+	targetCopy.Name = srcpoddefault.Name
+	targetCopy.APIVersion = srcpoddefault.APIVersion
 	targetCopy.Labels = labelsCopy
+	targetCopy.Spec = srcpoddefault.Spec
 	targetCopy.Annotations[common.ReplicatedAtAnnotation] = time.Now().Format(time.RFC3339)
-	targetCopy.Annotations[common.ReplicatedFromVersionAnnotation] = source.ResourceVersion
+	targetCopy.Annotations[common.ReplicatedFromVersionAnnotation] = srcpoddefault.ResourceVersion
 
 	res, _ := runtime.DefaultUnstructuredConverter.ToUnstructured(targetCopy)
 	mdb := &unstructured.Unstructured{}
 	mdb.SetUnstructuredContent(res)
 	var obj interface{}
 	if exists {
-		logger.Debugf("Updating existing role %s/%s", target.Name, targetCopy.Name)
-		obj, err = r.Client.(dynamic.Interface).Resource(gvr).Namespace(target.Name).Update(mdb, metav1.UpdateOptions{})
+		logger.Debugf("Updating existing poddefault %s/%s", target.Name, targetCopy.Name)
+		obj, err = r.DynamicClient.Resource(gvr).Namespace(target.Name).Update(mdb, metav1.UpdateOptions{})
 	} else {
-		logger.Debugf("Creating a new role %s/%s", target.Name, targetCopy.Name)
-		obj, err = r.Client.(dynamic.Interface).Resource(gvr).Namespace(target.Name).Create(mdb, metav1.CreateOptions{})
+		logger.Debugf("Creating a new poddefault %s/%s", target.Name, targetCopy.Name)
+		obj, err = r.DynamicClient.Resource(gvr).Namespace(target.Name).Create(mdb, metav1.CreateOptions{})
 	}
 	if err != nil {
-		return errors.Wrapf(err, "Failed to update role %s/%s", target.Name, targetCopy.Name)
+		return errors.Wrapf(err, "Failed to update poddefault %s/%s", target.Name, targetCopy.Name)
 	}
 
 	if err := r.Store.Update(obj); err != nil {
@@ -183,32 +202,31 @@ func (r *Replicator) ReplicateObjectTo(sourceObj interface{}, target *v1.Namespa
 
 func (r *Replicator) PatchDeleteDependent(sourceKey string, target interface{}) (interface{}, error) {
 
-	dependentKey := common.MustGetKey(target)
+	// targetsource := target.(*unstructured.Unstructured)
+	// var targetObject poddefaultv1.PodDefault
+	// runtime.DefaultUnstructuredConverter.FromUnstructured(targetsource.UnstructuredContent(), &targetObject)
+
+	targetObject := target.(*poddefaultv1.PodDefault)
+	dependentKey := common.MustGetKey(targetObject)
 	logger := log.WithFields(log.Fields{
 		"kind":   r.Kind,
 		"source": sourceKey,
 		"target": dependentKey,
 	})
 
-	targetObject, ok := target.(*poddefaultv1.PodDefault)
-	if !ok {
-		err := errors.Errorf("bad type returned from Store: %T", target)
-		return nil, err
-	}
-
 	patch := []common.JSONPatchOperation{{Operation: "remove", Path: "/rules"}}
 	patchBody, err := json.Marshal(&patch)
 
 	if err != nil {
-		return nil, errors.Wrapf(err, "error while building patch body for role %s: %v", dependentKey, err)
+		return nil, errors.Wrapf(err, "error while building patch body for poddefault %s: %v", dependentKey, err)
 	}
 
-	logger.Debugf("clearing dependent role %s", dependentKey)
+	logger.Debugf("clearing dependent poddefault %s", dependentKey)
 	logger.Tracef("patch body: %s", string(patchBody))
 
-	s, err := r.Client.(dynamic.Interface).Resource(gvr).Namespace(targetObject.Namespace).Patch(targetObject.Name, types.JSONPatchType, patchBody, metav1.UpdateOptions{})
+	s, err := r.DynamicClient.Resource(gvr).Namespace(targetObject.Namespace).Patch(targetObject.Name, types.JSONPatchType, patchBody, metav1.UpdateOptions{})
 	if err != nil {
-		return nil, errors.Wrapf(err, "error while patching role %s: %v", dependentKey, err)
+		return nil, errors.Wrapf(err, "error while patching poddefault %s: %v", dependentKey, err)
 	}
 	return s, nil
 }
@@ -221,9 +239,12 @@ func (r *Replicator) DeleteReplicatedResource(targetResource interface{}) error 
 		"target": targetLocation,
 	})
 
-	object := targetResource.(*poddefaultv1.PodDefault)
+	// targetsource := targetResource.(*unstructured.Unstructured)
+	// var targetObject poddefaultv1.PodDefault
+	// runtime.DefaultUnstructuredConverter.FromUnstructured(targetsource.UnstructuredContent(), &targetObject)
+	targetObject := targetResource.(*poddefaultv1.PodDefault)
 	logger.Debugf("Deleting %s", targetLocation)
-	if err := r.Client.(dynamic.Interface).Resource(gvr).Namespace(object.Namespace).Delete(object.Name, &metav1.DeleteOptions{}); err != nil {
+	if err := r.DynamicClient.Resource(gvr).Namespace(targetObject.Namespace).Delete(targetObject.Name, &metav1.DeleteOptions{}); err != nil {
 		return errors.Wrapf(err, "Failed deleting %s: %v", targetLocation, err)
 	}
 	return nil
