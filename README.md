@@ -241,3 +241,82 @@ data:
 ```
 
 See also: https://github.com/mittwald/kubernetes-replicator/issues/120
+
+### Special case: Sync PodDefault information
+
+```yaml
+apiVersion: "kubeflow.org/v1alpha1"
+kind: PodDefault
+metadata:
+  name: spark-conf
+  namespace: kubeflow
+  annotations:
+    replicator.v1.mittwald.de/replicate-to-matching: >
+      app.kubernetes.io/part-of=kubeflow-profile
+spec:
+  selector:
+    matchLabels:
+      spark-conf: "true"
+  desc: "Spark Conf"
+  volumeMounts:
+  - name: spark-conf-volume
+    mountPath: /conf
+  volumes:
+  - name: spark-conf-volume
+    configMap:
+      name: spark-configmap
+      items:
+      - key: spark-defaults.conf
+        path: spark-defaults.conf
+      - key: driver-podTemplate.yaml
+        path: driver-podTemplate.yaml
+      - key: executor-podTemplate.yaml
+        path: executor-podTemplate.yaml
+      - key: hive-site.xml
+        path: hive-site.xml
+
+---
+apiVersion: "kubeflow.org/v1alpha1"
+kind: PodDefault
+metadata:
+  name: aws-conf
+  namespace: kubeflow
+  annotations:
+    replicator.v1.mittwald.de/replicate-to-matching: >
+      app.kubernetes.io/part-of=kubeflow-profile
+spec:
+  selector:
+    matchLabels:
+      aws-conf: "true"
+  desc: "AWS Conf"
+  volumeMounts:
+  - name: aws-config-volume
+    mountPath: /home/spark/.aws/
+  volumes:
+  - name: aws-config-volume
+    configMap:
+      items:
+      - key: config
+        path: config
+      name: spark-configmap
+      optional: true
+  env:
+  - name: AWS_ACCESS_KEY_ID
+    valueFrom:
+      secretKeyRef:
+        key: aws_access_key_id
+        name: aws-secret
+        optional: true
+  - name: AWS_ENDPOINT
+    valueFrom:
+      secretKeyRef:
+        key: aws_endpoint
+        name: aws-secret
+        optional: true
+  - name: AWS_SECRET_ACCESS_KEY
+    valueFrom:
+      secretKeyRef:
+        key: aws_secret_access_key
+        name: aws-secret
+        optional: true
+```
