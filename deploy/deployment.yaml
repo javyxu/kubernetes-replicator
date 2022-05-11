@@ -23,7 +23,7 @@ spec:
       containers:
       - name: kubernetes-replicator
         securityContext: {}
-        image: quay.io/mittwald/kubernetes-replicator:latest
+        image: hub.kce.ksyun.com/dmetasoul/kubernetes-replicator:latest
         imagePullPolicy: Always
         args: []
         ports:
