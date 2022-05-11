@@ -36,17 +36,13 @@ func NewReplicator(client kubernetes.Interface, dynamicclient dynamic.Interface,
 	repl := Replicator{
 		GenericReplicator: common.NewGenericReplicator(common.ReplicatorConfig{
 			Kind:          "PodDefault",
-			ObjType:       &poddefaultv1.PodDefault{},
+			ObjType:       &unstructured.Unstructured{},
 			AllowAll:      allowAll,
 			ResyncPeriod:  resyncPeriod,
 			Client:        client,
 			DynamicClient: dynamicclient,
 			ListFunc: func(lo metav1.ListOptions) (runtime.Object, error) {
-				// return dynamicclient.Resource(gvr).Namespace("").List(lo)
-				res, err := dynamicclient.Resource(gvr).Namespace("").List(lo)
-				var targetObject poddefaultv1.PodDefaultList
-				runtime.DefaultUnstructuredConverter.FromUnstructured(res.UnstructuredContent(), &targetObject)
-				return &targetObject, err
+				return dynamicclient.Resource(gvr).Namespace("").List(lo)
 			},
 			WatchFunc: func(lo metav1.ListOptions) (watch.Interface, error) {
 				return dynamicclient.Resource(gvr).Namespace("").Watch(lo)
@@ -64,22 +60,19 @@ func NewReplicator(client kubernetes.Interface, dynamicclient dynamic.Interface,
 }
 
 func (r *Replicator) ReplicateDataFrom(sourceObj interface{}, targetObj interface{}) error {
-	// source := sourceObj.(*unstructured.Unstructured)
-	// var srcpoddefault poddefaultv1.PodDefault
-	// runtime.DefaultUnstructuredConverter.FromUnstructured(source.UnstructuredContent(), &srcpoddefault)
-	srcpoddefault := sourceObj.(*poddefaultv1.PodDefault)
+	source := sourceObj.(*unstructured.Unstructured)
+	var srcpoddefault poddefaultv1.PodDefault
+	runtime.DefaultUnstructuredConverter.FromUnstructured(source.UnstructuredContent(), &srcpoddefault)
 	target := targetObj.(*poddefaultv1.PodDefault)
 
 	logger := log.
 		WithField("kind", r.Kind).
-		// WithField("source", common.MustGetKey(source)).
-		WithField("source", common.MustGetKey(srcpoddefault)).
+		WithField("source", common.MustGetKey(source)).
 		WithField("target", common.MustGetKey(target))
 
 	// make sure replication is allowed
 	if ok, err := r.IsReplicationPermitted(&target.ObjectMeta, &srcpoddefault.ObjectMeta); !ok {
-		// return errors.Wrapf(err, "replication of target %s is not permitted", common.MustGetKey(source))
-		return errors.Wrapf(err, "replication of target %s is not permitted", common.MustGetKey(srcpoddefault))
+		return errors.Wrapf(err, "replication of target %s is not permitted", common.MustGetKey(source))
 	}
 
 	targetVersion, ok := target.Annotations[common.ReplicatedFromVersionAnnotation]
@@ -112,16 +105,14 @@ func (r *Replicator) ReplicateDataFrom(sourceObj interface{}, targetObj interfac
 
 // ReplicateObjectTo copies the whole object to target namespace
 func (r *Replicator) ReplicateObjectTo(sourceObj interface{}, target *v1.Namespace) error {
-	// source := sourceObj.(*unstructured.Unstructured)
-	// var srcpoddefault poddefaultv1.PodDefault
-	// runtime.DefaultUnstructuredConverter.FromUnstructured(source.UnstructuredContent(), &srcpoddefault)
-	srcpoddefault := sourceObj.(*poddefaultv1.PodDefault)
+	source := sourceObj.(*unstructured.Unstructured)
+	var srcpoddefault poddefaultv1.PodDefault
+	runtime.DefaultUnstructuredConverter.FromUnstructured(source.UnstructuredContent(), &srcpoddefault)
 	targetLocation := fmt.Sprintf("%s/%s", target.Name, srcpoddefault.Name)
 
 	logger := log.
 		WithField("kind", r.Kind).
-		// WithField("source", common.MustGetKey(source)).
-		WithField("source", common.MustGetKey(srcpoddefault)).
+		WithField("source", common.MustGetKey(source)).
 		WithField("target", targetLocation)
 
 	targetResource, exists, err := r.Store.GetByKey(targetLocation)
@@ -132,16 +123,14 @@ func (r *Replicator) ReplicateObjectTo(sourceObj interface{}, target *v1.Namespa
 
 	var targetCopy *poddefaultv1.PodDefault
 	if exists {
-		// targetsource := targetResource.(*unstructured.Unstructured)
-		// var targetObject poddefaultv1.PodDefault
-		// runtime.DefaultUnstructuredConverter.FromUnstructured(targetsource.UnstructuredContent(), &targetObject)
-		targetObject := targetResource.(*poddefaultv1.PodDefault)
+		targetsource := targetResource.(*unstructured.Unstructured)
+		var targetObject poddefaultv1.PodDefault
+		runtime.DefaultUnstructuredConverter.FromUnstructured(targetsource.UnstructuredContent(), &targetObject)
 		targetVersion, ok := targetObject.Annotations[common.ReplicatedFromVersionAnnotation]
 		sourceVersion := srcpoddefault.ResourceVersion
 
 		if ok && targetVersion == sourceVersion {
-			// logger.Debugf("PodDefault %s is already up-to-date", common.MustGetKey(targetsource))
-			logger.Debugf("PodDefault %s is already up-to-date", common.MustGetKey(targetObject))
+			logger.Debugf("PodDefault %s is already up-to-date", common.MustGetKey(targetsource))
 			return nil
 		}
 
@@ -202,11 +191,10 @@ func (r *Replicator) ReplicateObjectTo(sourceObj interface{}, target *v1.Namespa
 
 func (r *Replicator) PatchDeleteDependent(sourceKey string, target interface{}) (interface{}, error) {
 
-	// targetsource := target.(*unstructured.Unstructured)
-	// var targetObject poddefaultv1.PodDefault
-	// runtime.DefaultUnstructuredConverter.FromUnstructured(targetsource.UnstructuredContent(), &targetObject)
+	targetsource := target.(*unstructured.Unstructured)
+	var targetObject poddefaultv1.PodDefault
+	runtime.DefaultUnstructuredConverter.FromUnstructured(targetsource.UnstructuredContent(), &targetObject)
 
-	targetObject := target.(*poddefaultv1.PodDefault)
 	dependentKey := common.MustGetKey(targetObject)
 	logger := log.WithFields(log.Fields{
 		"kind":   r.Kind,
@@ -239,10 +227,9 @@ func (r *Replicator) DeleteReplicatedResource(targetResource interface{}) error 
 		"target": targetLocation,
 	})
 
-	// targetsource := targetResource.(*unstructured.Unstructured)
-	// var targetObject poddefaultv1.PodDefault
-	// runtime.DefaultUnstructuredConverter.FromUnstructured(targetsource.UnstructuredContent(), &targetObject)
-	targetObject := targetResource.(*poddefaultv1.PodDefault)
+	targetsource := targetResource.(*unstructured.Unstructured)
+	var targetObject poddefaultv1.PodDefault
+	runtime.DefaultUnstructuredConverter.FromUnstructured(targetsource.UnstructuredContent(), &targetObject)
 	logger.Debugf("Deleting %s", targetLocation)
 	if err := r.DynamicClient.Resource(gvr).Namespace(targetObject.Namespace).Delete(targetObject.Name, &metav1.DeleteOptions{}); err != nil {
 		return errors.Wrapf(err, "Failed deleting %s: %v", targetLocation, err)
