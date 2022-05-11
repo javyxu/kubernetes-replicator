@@ -11,3 +11,6 @@
 # Target output
 /replicator/target
 /dist
+
+# MacOS
+.DS_Store

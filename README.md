@@ -1,4 +1,4 @@
-# ConfigMap, Secret and Role, and RoleBinding replication for Kubernetes
+# ConfigMap, Secret and Role, RoleBinding, PodDefault replication for Kubernetes
 
 ![Build Status](https://github.com/mittwald/kubernetes-replicator/workflows/Compile%20&%20Test/badge.svg)
 
